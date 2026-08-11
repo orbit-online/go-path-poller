@@ -35,103 +35,103 @@ func NewPathPoller() (*PathPoller, error) {
 	return &poller, nil
 }
 
-func (d *PathPoller) SetInterval(interval time.Duration) {
-	d.interval = interval
-	d.intervalChanged <- struct{}{}
+func (p *PathPoller) SetInterval(interval time.Duration) {
+	p.interval = interval
+	p.intervalChanged <- struct{}{}
 }
 
-func (d *PathPoller) Add(path string) error {
-	if i := slices.Index(d.fullWatchList, path); i >= 0 {
+func (p *PathPoller) Add(path string) error {
+	if i := slices.Index(p.fullWatchList, path); i >= 0 {
 		return nil
 	}
-	if err := d.watcher.Add(path); err != nil {
+	if err := p.watcher.Add(path); err != nil {
 		if _, statErr := os.Stat(path); statErr == nil {
 			return fmt.Errorf("pathpoller: fsnotify cannot watch the file, but it exists: %w", err)
 		}
-		d.watchCreate = append(d.watchCreate, path)
+		p.watchCreate = append(p.watchCreate, path)
 	}
-	d.fullWatchList = append(d.fullWatchList, path)
+	p.fullWatchList = append(p.fullWatchList, path)
 	return nil
 }
 
-func (d *PathPoller) Remove(path string) error {
-	if i := slices.Index(d.fullWatchList, path); i >= 0 {
-		d.fullWatchList = slices.Delete(d.fullWatchList, i, i+1)
+func (p *PathPoller) Remove(path string) error {
+	if i := slices.Index(p.fullWatchList, path); i >= 0 {
+		p.fullWatchList = slices.Delete(p.fullWatchList, i, i+1)
 	} else {
 		return fsnotify.ErrNonExistentWatch
 	}
-	if i := slices.Index(d.watchCreate, path); i >= 0 {
-		d.watchCreate = slices.Delete(d.watchCreate, i, i+1)
+	if i := slices.Index(p.watchCreate, path); i >= 0 {
+		p.watchCreate = slices.Delete(p.watchCreate, i, i+1)
 		return nil
 	} else {
-		return d.watcher.Remove(path)
+		return p.watcher.Remove(path)
 	}
 }
 
-func (d *PathPoller) Run(ctx context.Context) error {
-	defer d.watcher.Close()
-	defer close(d.intervalChanged)
-	defer close(d.Events)
-	defer close(d.Errors)
+func (p *PathPoller) Run(ctx context.Context) error {
+	defer p.watcher.Close()
+	defer close(p.intervalChanged)
+	defer close(p.Events)
+	defer close(p.Errors)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-d.intervalChanged:
-		case <-time.After(d.interval):
+		case <-p.intervalChanged:
+		case <-time.After(p.interval):
 			// Run through the watchCreate list and send a CREATE event for any path that exists
 			created := []string{}
-			for _, path := range d.watchCreate {
+			for _, path := range p.watchCreate {
 				if _, err := os.Stat(path); err == nil {
 					created = append(created, path)
 				}
 			}
 			for _, path := range created {
-				if i := slices.Index(d.watchCreate, path); i >= 0 {
+				if i := slices.Index(p.watchCreate, path); i >= 0 {
 					// Remove path from watchCreate list
-					d.watchCreate = slices.Delete(d.watchCreate, i, i+1)
+					p.watchCreate = slices.Delete(p.watchCreate, i, i+1)
 				} else {
 					// shouldn't happen
-					d.Errors <- fmt.Errorf("pathpoller: internal error, a path disappeared from the watchCreate list")
+					p.Errors <- fmt.Errorf("pathpoller: internal error, a path disappeared from the watchCreate list")
 				}
-				if err := d.watcher.Add(path); err != nil {
+				if err := p.watcher.Add(path); err != nil {
 					// Add file to fsnotify watch list
-					d.Errors <- fmt.Errorf("pathpoller: fsnotify cannot watch the file, but it exists: %w", err)
+					p.Errors <- fmt.Errorf("pathpoller: fsnotify cannot watch the file, but it exists: %w", err)
 				}
 				// Send the event
-				d.Events <- fsnotify.Event{
+				p.Events <- fsnotify.Event{
 					Op:   fsnotify.Create,
 					Name: path,
 				}
 			}
-		case event, ok := <-d.watcher.Events:
+		case event, ok := <-p.watcher.Events:
 			if !ok {
 				return fmt.Errorf("fsnotify watcher was closed")
 			}
 			// Rather than check what kind of event we're dealing with we just check if the file exists
 			// and either remove or add it to the watchCreate list
 			if _, err := os.Stat(event.Name); err == nil {
-				if i := slices.Index(d.watchCreate, event.Name); i >= 0 {
+				if i := slices.Index(p.watchCreate, event.Name); i >= 0 {
 					// File exists and was in the watchCreate list, remove it.
 					// This can happen if the parent folder is watched in addition to the particular file
-					d.watchCreate = slices.Delete(d.watchCreate, i, i+1)
+					p.watchCreate = slices.Delete(p.watchCreate, i, i+1)
 				}
 			} else {
-				if i := slices.Index(d.fullWatchList, event.Name); i >= 0 {
-					if i := slices.Index(d.watchCreate, event.Name); i < 0 {
+				if i := slices.Index(p.fullWatchList, event.Name); i >= 0 {
+					if i := slices.Index(p.watchCreate, event.Name); i < 0 {
 						// File does not exist, is explicitly watched, and is not yet in the watchCreate list, add it
-						d.watchCreate = append(d.watchCreate, event.Name)
+						p.watchCreate = append(p.watchCreate, event.Name)
 					}
 				}
 			}
 			// forward the event
-			d.Events <- event
-		case err, ok := <-d.watcher.Errors:
+			p.Events <- event
+		case err, ok := <-p.watcher.Errors:
 			if !ok {
 				return fmt.Errorf("fsnotify watcher was closed")
 			} else {
 				// forward the error
-				d.Errors <- err
+				p.Errors <- err
 			}
 		}
 	}

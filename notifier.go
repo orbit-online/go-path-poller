@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync/atomic"
+	"time"
 )
 
 type PathNotifier struct {
@@ -28,77 +29,85 @@ func NewPathNotifier() (*PathNotifier, error) {
 	}, nil
 }
 
-func (p *PathNotifier) AddFunc(path string, fn func()) (funcId uint64, err error) {
-	funcId = p.nextFuncId.Add(1)
-	if _, ok := p.funcs[path]; !ok {
-		err := p.poller.Add(path)
+func (n *PathNotifier) SetInterval(interval time.Duration) {
+	n.poller.SetInterval(interval)
+}
+
+func (n *PathNotifier) AddFunc(path string, fn func()) (funcId uint64, err error) {
+	funcId = n.nextFuncId.Add(1)
+	if _, ok := n.funcs[path]; !ok {
+		err := n.poller.Add(path)
 		if err != nil {
 			return 0, err
 		}
-		p.funcs[path] = map[uint64]func(){}
+		n.funcs[path] = map[uint64]func(){}
 	}
-	p.funcs[path][funcId] = fn
+	n.funcs[path][funcId] = fn
 	return funcId, err
 }
 
-func (p *PathNotifier) RemoveFunc(path string, funcId uint64) {
-	if funcs, ok := p.funcs[path]; ok {
-		if _, ok := p.funcs[path][funcId]; ok {
+func (n *PathNotifier) RemoveFunc(path string, funcId uint64) {
+	if funcs, ok := n.funcs[path]; ok {
+		if _, ok := n.funcs[path][funcId]; ok {
 			delete(funcs, funcId)
 			if len(funcs) == 0 {
-				delete(p.funcs, path)
-				if _, ok := p.channels[path]; !ok {
-					p.poller.Remove(path)
+				delete(n.funcs, path)
+				if _, ok := n.channels[path]; !ok {
+					n.poller.Remove(path)
 				}
 			}
 		}
 	}
 }
 
-func (p *PathNotifier) AddChannel(path string) (chan struct{}, error) {
+func (n *PathNotifier) AddChannel(path string) (chan struct{}, error) {
 	channel := make(chan struct{})
-	if _, ok := p.channels[path]; ok {
-		p.channels[path] = append(p.channels[path], channel)
+	if _, ok := n.channels[path]; ok {
+		n.channels[path] = append(n.channels[path], channel)
 	} else {
-		err := p.poller.Add(path)
+		err := n.poller.Add(path)
 		if err != nil {
 			return nil, err
 		}
-		p.channels[path] = [](chan struct{}){channel}
+		n.channels[path] = [](chan struct{}){channel}
 	}
 	return channel, nil
 }
 
-func (p *PathNotifier) RemoveChannel(path string, channel chan struct{}) {
-	if channels, ok := p.channels[path]; ok {
+func (n *PathNotifier) RemoveChannel(path string, channel chan struct{}) {
+	if channels, ok := n.channels[path]; ok {
 		if i := slices.Index(channels, channel); i >= 0 {
-			p.channels[path] = slices.Delete(p.channels[path], i, i+1)
-			if len(p.channels[path]) == 0 {
-				delete(p.channels, path)
-				if _, ok := p.funcs[path]; !ok {
-					p.poller.Remove(path)
+			n.channels[path] = slices.Delete(n.channels[path], i, i+1)
+			if len(n.channels[path]) == 0 {
+				delete(n.channels, path)
+				if _, ok := n.funcs[path]; !ok {
+					n.poller.Remove(path)
 				}
 			}
 		}
 	}
 }
 
-func (p *PathNotifier) WatchPaths(ctx context.Context) error {
+func (n *PathNotifier) WatchPaths(ctx context.Context) error {
+	runErr := make(chan error)
+	go func() { runErr <- n.poller.Run(ctx) }()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case event, ok := <-p.poller.Events:
+		case err := <-runErr:
+			return err
+		case event, ok := <-n.poller.Events:
 			if !ok {
 				return fmt.Errorf("Watcher was closed")
 			}
 			slog.Debug("File changed", "path", event.Name)
-			if funcs, ok := p.funcs[event.Name]; ok {
+			if funcs, ok := n.funcs[event.Name]; ok {
 				for _, fn := range funcs {
 					go fn()
 				}
 			}
-			if channels, ok := p.channels[event.Name]; ok {
+			if channels, ok := n.channels[event.Name]; ok {
 				for _, channel := range channels {
 					select {
 					case channel <- struct{}{}:
@@ -106,7 +115,7 @@ func (p *PathNotifier) WatchPaths(ctx context.Context) error {
 					}
 				}
 			}
-		case err, ok := <-p.poller.Errors:
+		case err, ok := <-n.poller.Errors:
 			if !ok {
 				return fmt.Errorf("Watcher was closed")
 			}
