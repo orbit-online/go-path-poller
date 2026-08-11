@@ -61,7 +61,7 @@ func (n *PathNotifier) RemoveFunc(path string, funcId uint64) {
 }
 
 func (n *PathNotifier) AddChannel(path string) (chan struct{}, error) {
-	channel := make(chan struct{})
+	channel := make(chan struct{}, 1)
 	if _, ok := n.channels[path]; ok {
 		n.channels[path] = append(n.channels[path], channel)
 	} else {
