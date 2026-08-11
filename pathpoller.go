@@ -11,8 +11,6 @@ import (
 )
 
 type PathPoller struct {
-	ctx             context.Context
-	Close           func()
 	interval        time.Duration
 	intervalChanged chan struct{}
 	fullWatchList   []string
@@ -22,22 +20,18 @@ type PathPoller struct {
 	Errors          chan error
 }
 
-func NewPathPoller(ctx context.Context) (*PathPoller, error) {
+func NewPathPoller() (*PathPoller, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create filesystem watcher: %w", err)
 	}
-	cancelCtx, cancel := context.WithCancel(ctx)
 	poller := PathPoller{
-		ctx:         cancelCtx,
-		Close:       cancel,
 		interval:    10 * time.Second,
 		watchCreate: []string{},
 		watcher:     watcher,
 		Events:      make(chan fsnotify.Event),
 		Errors:      make(chan error),
 	}
-	go poller.run()
 	return &poller, nil
 }
 
@@ -74,15 +68,15 @@ func (d *PathPoller) Remove(path string) error {
 	}
 }
 
-func (d *PathPoller) run() {
+func (d *PathPoller) Run(ctx context.Context) error {
 	defer d.watcher.Close()
 	defer close(d.intervalChanged)
 	defer close(d.Events)
 	defer close(d.Errors)
 	for {
 		select {
-		case <-d.ctx.Done():
-			return
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-d.intervalChanged:
 		case <-time.After(d.interval):
 			// Run through the watchCreate list and send a CREATE event for any path that exists
@@ -112,8 +106,7 @@ func (d *PathPoller) run() {
 			}
 		case event, ok := <-d.watcher.Events:
 			if !ok {
-				d.Errors <- fmt.Errorf("fsnotify watcher was closed")
-				return
+				return fmt.Errorf("fsnotify watcher was closed")
 			}
 			// Rather than check what kind of event we're dealing with we just check if the file exists
 			// and either remove or add it to the watchCreate list
@@ -135,8 +128,7 @@ func (d *PathPoller) run() {
 			d.Events <- event
 		case err, ok := <-d.watcher.Errors:
 			if !ok {
-				d.Errors <- fmt.Errorf("fsnotify watcher was closed")
-				return
+				return fmt.Errorf("fsnotify watcher was closed")
 			} else {
 				// forward the error
 				d.Errors <- err
