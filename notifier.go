@@ -77,6 +77,7 @@ func (n *PathNotifier) AddChannel(path string) (chan struct{}, error) {
 func (n *PathNotifier) RemoveChannel(path string, channel chan struct{}) {
 	if channels, ok := n.channels[path]; ok {
 		if i := slices.Index(channels, channel); i >= 0 {
+			close(n.channels[path][i])
 			n.channels[path] = slices.Delete(n.channels[path], i, i+1)
 			if len(n.channels[path]) == 0 {
 				delete(n.channels, path)
@@ -88,9 +89,21 @@ func (n *PathNotifier) RemoveChannel(path string, channel chan struct{}) {
 	}
 }
 
+func (n *PathNotifier) closeAll() {
+	for _, channels := range n.channels {
+		for _, channel := range channels {
+			close(channel)
+		}
+	}
+}
+
 func (n *PathNotifier) WatchPaths(ctx context.Context) error {
 	runErr := make(chan error)
-	go func() { runErr <- n.poller.Run(ctx) }()
+	go func() {
+		runErr <- n.poller.Run(ctx)
+		defer close(runErr)
+	}()
+	defer n.closeAll()
 	for {
 		select {
 		case <-ctx.Done():
