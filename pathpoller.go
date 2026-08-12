@@ -26,11 +26,12 @@ func NewPathPoller() (*PathPoller, error) {
 		return nil, fmt.Errorf("failed to create filesystem watcher: %w", err)
 	}
 	poller := PathPoller{
-		interval:    10 * time.Second,
-		watchCreate: []string{},
-		watcher:     watcher,
-		Events:      make(chan fsnotify.Event),
-		Errors:      make(chan error),
+		interval:        10 * time.Second,
+		intervalChanged: make(chan struct{}),
+		watchCreate:     []string{},
+		watcher:         watcher,
+		Events:          make(chan fsnotify.Event),
+		Errors:          make(chan error),
 	}
 	return &poller, nil
 }
