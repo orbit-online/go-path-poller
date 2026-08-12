@@ -18,6 +18,7 @@ type PathPoller struct {
 	watcher         *fsnotify.Watcher
 	Events          chan fsnotify.Event
 	Errors          chan error
+	started         bool
 }
 
 func NewPathPoller() (*PathPoller, error) {
@@ -32,6 +33,7 @@ func NewPathPoller() (*PathPoller, error) {
 		watcher:         watcher,
 		Events:          make(chan fsnotify.Event),
 		Errors:          make(chan error),
+		started:         false,
 	}
 	return &poller, nil
 }
@@ -70,6 +72,10 @@ func (p *PathPoller) Remove(path string) error {
 }
 
 func (p *PathPoller) Run(ctx context.Context) error {
+	if p.started {
+		return fmt.Errorf("Unable to run, PathPoller was already started once")
+	}
+	p.started = true
 	defer p.watcher.Close()
 	defer close(p.intervalChanged)
 	defer close(p.Events)

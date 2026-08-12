@@ -14,6 +14,7 @@ type PathNotifier struct {
 	nextFuncId atomic.Uint64
 	funcs      map[string]map[uint64]func()
 	channels   map[string][](chan struct{})
+	started    bool
 }
 
 func NewPathNotifier() (*PathNotifier, error) {
@@ -26,6 +27,7 @@ func NewPathNotifier() (*PathNotifier, error) {
 		nextFuncId: atomic.Uint64{},
 		funcs:      map[string](map[uint64]func()){},
 		channels:   map[string]([](chan struct{})){},
+		started:    false,
 	}, nil
 }
 
@@ -97,7 +99,11 @@ func (n *PathNotifier) closeAll() {
 	}
 }
 
-func (n *PathNotifier) WatchPaths(ctx context.Context) error {
+func (n *PathNotifier) Run(ctx context.Context) error {
+	if n.started {
+		return fmt.Errorf("Unable to run, PathNotifier was already started once")
+	}
+	n.started = true
 	runErr := make(chan error)
 	go func() {
 		runErr <- n.poller.Run(ctx)
