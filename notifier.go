@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,6 +13,7 @@ import (
 type PathNotifier struct {
 	poller     *PathPoller
 	nextFuncId atomic.Uint64
+	mu         sync.Mutex
 	funcs      map[string]map[uint64]func()
 	channels   map[string][](chan struct{})
 	started    bool
@@ -25,6 +27,7 @@ func NewPathNotifier() (*PathNotifier, error) {
 	return &PathNotifier{
 		poller:     poller,
 		nextFuncId: atomic.Uint64{},
+		mu:         sync.Mutex{},
 		funcs:      map[string](map[uint64]func()){},
 		channels:   map[string]([](chan struct{})){},
 		started:    false,
@@ -36,6 +39,8 @@ func (n *PathNotifier) SetInterval(interval time.Duration) {
 }
 
 func (n *PathNotifier) AddFunc(path string, fn func()) (funcId uint64, err error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	funcId = n.nextFuncId.Add(1)
 	if _, ok := n.funcs[path]; !ok {
 		err := n.poller.Add(path)
@@ -49,6 +54,8 @@ func (n *PathNotifier) AddFunc(path string, fn func()) (funcId uint64, err error
 }
 
 func (n *PathNotifier) RemoveFunc(path string, funcId uint64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if funcs, ok := n.funcs[path]; ok {
 		if _, ok := n.funcs[path][funcId]; ok {
 			delete(funcs, funcId)
@@ -63,6 +70,8 @@ func (n *PathNotifier) RemoveFunc(path string, funcId uint64) {
 }
 
 func (n *PathNotifier) AddChannel(path string) (chan struct{}, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	channel := make(chan struct{}, 1)
 	if _, ok := n.channels[path]; ok {
 		n.channels[path] = append(n.channels[path], channel)
@@ -77,6 +86,8 @@ func (n *PathNotifier) AddChannel(path string) (chan struct{}, error) {
 }
 
 func (n *PathNotifier) RemoveChannel(path string, channel chan struct{}) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if channels, ok := n.channels[path]; ok {
 		if i := slices.Index(channels, channel); i >= 0 {
 			close(n.channels[path][i])

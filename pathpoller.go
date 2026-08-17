@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -13,6 +14,7 @@ import (
 type PathPoller struct {
 	interval        time.Duration
 	intervalChanged chan struct{}
+	mu              sync.Mutex
 	fullWatchList   []string
 	watchCreate     []string
 	watcher         *fsnotify.Watcher
@@ -29,6 +31,8 @@ func NewPathPoller() (*PathPoller, error) {
 	poller := PathPoller{
 		interval:        10 * time.Second,
 		intervalChanged: make(chan struct{}),
+		mu:              sync.Mutex{},
+		fullWatchList:   []string{},
 		watchCreate:     []string{},
 		watcher:         watcher,
 		Events:          make(chan fsnotify.Event),
@@ -44,6 +48,8 @@ func (p *PathPoller) SetInterval(interval time.Duration) {
 }
 
 func (p *PathPoller) Add(path string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if i := slices.Index(p.fullWatchList, path); i >= 0 {
 		return nil
 	}
@@ -58,6 +64,8 @@ func (p *PathPoller) Add(path string) error {
 }
 
 func (p *PathPoller) Remove(path string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if i := slices.Index(p.fullWatchList, path); i >= 0 {
 		p.fullWatchList = slices.Delete(p.fullWatchList, i, i+1)
 	} else {
@@ -96,7 +104,9 @@ func (p *PathPoller) Run(ctx context.Context) error {
 			for _, path := range created {
 				if i := slices.Index(p.watchCreate, path); i >= 0 {
 					// Remove path from watchCreate list
+					p.mu.Lock()
 					p.watchCreate = slices.Delete(p.watchCreate, i, i+1)
+					p.mu.Unlock()
 				} else {
 					// shouldn't happen
 					p.Errors <- fmt.Errorf("pathpoller: internal error, a path disappeared from the watchCreate list")
@@ -121,13 +131,17 @@ func (p *PathPoller) Run(ctx context.Context) error {
 				if i := slices.Index(p.watchCreate, event.Name); i >= 0 {
 					// File exists and was in the watchCreate list, remove it.
 					// This can happen if the parent folder is watched in addition to the particular file
+					p.mu.Lock()
 					p.watchCreate = slices.Delete(p.watchCreate, i, i+1)
+					p.mu.Unlock()
 				}
 			} else {
 				if i := slices.Index(p.fullWatchList, event.Name); i >= 0 {
 					if i := slices.Index(p.watchCreate, event.Name); i < 0 {
 						// File does not exist, is explicitly watched, and is not yet in the watchCreate list, add it
+						p.mu.Lock()
 						p.watchCreate = append(p.watchCreate, event.Name)
+						p.mu.Unlock()
 					}
 				}
 			}
