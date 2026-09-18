@@ -103,6 +103,8 @@ func (n *PathNotifier) RemoveChannel(path string, channel chan struct{}) {
 }
 
 func (n *PathNotifier) closeAll() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	for _, channels := range n.channels {
 		for _, channel := range channels {
 			close(channel)
