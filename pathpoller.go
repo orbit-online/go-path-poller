@@ -135,6 +135,13 @@ func (p *PathPoller) Run(ctx context.Context) error {
 					p.watchCreate = slices.Delete(p.watchCreate, i, i+1)
 					p.mu.Unlock()
 				}
+				if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+					// The path was replaced (e.g. an atomic write renamed a new file over it),
+					// fsnotify dropped the watch along with the old file, watch the new one
+					if err := p.watcher.Add(event.Name); err != nil {
+						p.Errors <- fmt.Errorf("pathpoller: fsnotify cannot watch the replaced file: %w", err)
+					}
+				}
 			} else {
 				if i := slices.Index(p.fullWatchList, event.Name); i >= 0 {
 					if i := slices.Index(p.watchCreate, event.Name); i < 0 {
